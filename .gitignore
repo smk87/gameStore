@@ -375,3 +375,7 @@ FodyWeavers.xsd
 # JetBrains Rider
 .idea/
 *.sln.iml
+*.db
+Program.cs
+GameStore.db-shm
+GameStore.db-wal
