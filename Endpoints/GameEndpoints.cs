@@ -1,6 +1,8 @@
 using gameStore.Data;
 using GameStore.Dtos;
 using gameStore.Entities;
+using gameStore.Mapping;
+using Microsoft.EntityFrameworkCore;
 
 namespace gameStore.Endpoints;
 
@@ -8,68 +10,82 @@ public static class GameEndpoints
 {
     const string GetGameEndpointName = "GetGame";
 
-    private static readonly List<GameDto> Games =
-    [
-        new(1, "Game 1", "Genre 1", 10.0m, new DateOnly(2021, 1, 1)),
-        new(2, "Game 2", "Genre 2", 20.0m, new DateOnly(2022, 2, 2)),
-        new(3, "Game 3", "Genre 3", 30.0m, new DateOnly(2023, 3, 3))
-    ];
-
     public static RouteGroupBuilder MapGameEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("games").WithParameterValidation();
 
         // GET /games
-        group.MapGet("/", () => Games);
+        group.MapGet("/",
+            (GameStoreContext dbContext) =>
+            {
+                return dbContext.Games
+                    .Include(game => game.Genre)
+                    .Select(game => game.ToGameDetailsDto());
+            });
 
         // GET /games/{id}
-        group.MapGet("/{id}", (int id) =>
+        group.MapGet("/{id}", (int id, GameStoreContext dbContext) =>
         {
-            GameDto? game = Games.Find(game => game.Id == id);
+            Game? game = dbContext.Games
+                .Include(game => game.Genre)
+                .FirstOrDefault(game => game.Id == id);
 
-            return game is not null ? Results.Ok(game) : Results.NotFound();
+            return game is not null ? Results.Ok(game.ToGameDetailsDto()) : Results.NotFound();
         }).WithName(GetGameEndpointName);
 
         // POST /games
         group.MapPost("/", (CreateGameDto newGame, GameStoreContext dbContext) =>
         {
-            Game game = new()
-            {
-                Name = newGame.Name,
-                Genre = dbContext.Genres.Find(newGame.GenreId),
-                GenreId = newGame.GenreId,
-                Price = newGame.Price,
-                ReleaseDate = newGame.ReleaseDate
-            };
+            Game game = newGame.ToEntity();
+            game.Genre = dbContext.Genres.Find(newGame.GenreId);
 
             dbContext.Games.Add(game);
             dbContext.SaveChanges();
 
-            GameDto gameDto = new(game.Id, game.Name, game.Genre!.Name, game.Price, game.ReleaseDate);
-
-            return Results.CreatedAtRoute(GetGameEndpointName, new { id = game.Id }, gameDto);
+            return Results.CreatedAtRoute(GetGameEndpointName, new { id = game.Id },
+                game.ToGameDetailsDto());
         });
 
         // PUT /games/{id}
-        group.MapPut("/{id}", (int id, UpdateGameDto updatedGame) =>
+        group.MapPut("/{id}", (int id, UpdateGameDto updatedGame, GameStoreContext dbContext) =>
         {
-            var index = Games.FindIndex(game => game.Id == id);
+            Game? existingGame = dbContext.Games.Find(id);
 
-            if (index == -1)
+
+            if (existingGame is null)
             {
                 return Results.NotFound();
             }
 
-            Games[index] = new GameDto(id, updatedGame.Name, updatedGame.Genre, updatedGame.Price,
-                updatedGame.ReleaseDate);
+            var updatedGenre = dbContext.Genres.Find(updatedGame.GenreId);
+
+            if (updatedGenre is null)
+            {
+                return Results.BadRequest("Invalid GenreId");
+            }
+
+            dbContext
+                .Entry(existingGame)
+                .CurrentValues
+                .SetValues(updatedGame.ToEntity(id, updatedGenre));
+
+            dbContext.SaveChanges();
 
             return Results.NoContent();
         });
 
         // DELETE /games/{id}
-        group.MapDelete("/{id}", (int id) =>
+        group.MapDelete("/{id}", (int id, GameStoreContext dbContext) =>
         {
-            Games.RemoveAll(game => game.Id == id);
+            Game? game = dbContext.Games.Find(id);
+
+            if (game is null)
+            {
+                return Results.NotFound();
+            }
+
+            dbContext.Games.Remove(game);
+            dbContext.SaveChanges();
 
             return Results.NoContent();
         });
